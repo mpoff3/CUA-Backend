@@ -10,8 +10,14 @@ import multiprocessing
 from functools import partial
 
 app = FastAPI()
-# Use ProcessPoolExecutor instead of ThreadPoolExecutor to completely isolate from the main process
-process_pool = ProcessPoolExecutor(max_workers=10)
+# Use a ProcessPoolExecutor, forcing the "spawn" start method so that
+# worker processes start with a **fresh** Python interpreter instead of being
+# forked.  On Linux the default is "fork", which copies the parent asyncio
+# event-loop into the child and makes Playwright (sync API) think there is an
+# already-running loop, resulting in the runtime error you observed inside
+# Docker.  Using "spawn" matches the behaviour you get on macOS and Windows
+# where the code already works.
+process_pool = ProcessPoolExecutor(max_workers=10, mp_context=multiprocessing.get_context("spawn"))
 
 class UserInput(BaseModel):
     user_input: str

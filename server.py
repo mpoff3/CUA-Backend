@@ -5,12 +5,13 @@ from agent.agent import Agent
 from computers import LocalPlaywrightComputer
 from collections import Counter
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
 from functools import partial
 
 app = FastAPI()
-# Create a thread pool executor for running sync code
-thread_pool = ThreadPoolExecutor(max_workers=10)
+# Use ProcessPoolExecutor instead of ThreadPoolExecutor to completely isolate from the main process
+process_pool = ProcessPoolExecutor(max_workers=10)
 
 class UserInput(BaseModel):
     user_input: str
@@ -20,75 +21,80 @@ class Response(BaseModel):
     num_commands: int
     num_command_types: int
 
+def run_playwright_process(user_input: str) -> Dict:
+    """Run the Playwright code in a completely separate process"""
+    return process_user_input(user_input)
+
 def process_user_input_single_attempt(user_input: str) -> Dict:
     with LocalPlaywrightComputer(headless=True) as computer:
-        # Initialize browser with starting URL
-        computer.goto("https://www.westelm.com")
-        
-        agent = Agent(
-            model="computer-use-preview",
-            computer=computer,
-            acknowledge_safety_check_callback=lambda x: True  # Auto-approve safety checks
-        )
-        items = []
-        has_final_response = False
-        
-        # Initialize the conversation with user input
-        items.append({"role": "user", "content": user_input})
-        
-        # Run the agent and wait for final response
-        while not has_final_response:
-            output_items = agent.run_full_turn(
-                items,
-                print_steps=True,  # Enable printing of reasoning and actions
-                show_images=False,
-                debug=False,
-                reasoning_summary="concise"
+        try:
+            # Initialize browser with starting URL
+            computer.goto("https://www.westelm.com")
+            
+            agent = Agent(
+                model="computer-use-preview",
+                computer=computer,
+                acknowledge_safety_check_callback=lambda x: True  # Auto-approve safety checks
+            )
+            items = []
+            has_final_response = False
+            
+            # Initialize the conversation with user input
+            items.append({"role": "user", "content": user_input})
+            
+            # Run the agent and wait for final response
+            while not has_final_response:
+                output_items = agent.run_full_turn(
+                    items,
+                    print_steps=True,
+                    show_images=False,
+                    debug=False,
+                    reasoning_summary="concise"
+                )
+                
+                # Process all items from this turn
+                for item in output_items:
+                    items.append(item)
+                    if item.get("role") == "assistant":
+                        has_final_response = True
+            
+            # Get the final assistant message
+            final_message = next(
+                (item for item in reversed(items) 
+                 if item.get("role") == "assistant"),
+                None
             )
             
-            # Process all items from this turn
-            for item in output_items:
-                items.append(item)
-                # Only set has_final_response after processing all items
-                if item.get("role") == "assistant":
-                    has_final_response = True
-        
-        # Get the final assistant message
-        final_message = next(
-            (item for item in reversed(items) 
-             if item.get("role") == "assistant"),
-            None
-        )
-        
-        if final_message is None:
-            final_response = "No response from assistant"
-        else:
-            # Handle the case where content is a list of message objects
-            content = final_message.get("content", [])
-            if isinstance(content, list) and len(content) > 0:
-                # Extract text from the first message object
-                final_response = content[0].get("text", "No text in response")
+            if final_message is None:
+                final_response = "No response from assistant"
             else:
-                final_response = str(content)
-        
-        # Count computer actions
-        computer_calls = [
-            item for item in items 
-            if item.get("type") == "computer_call"
-        ]
-        
-        num_commands = len(computer_calls)
-        action_types = Counter(
-            call["action"]["type"] 
-            for call in computer_calls
-        )
-        num_command_types = len(action_types)
-        
-        return {
-            "final_response": final_response,
-            "num_commands": num_commands,
-            "num_command_types": num_command_types
-        }
+                content = final_message.get("content", [])
+                if isinstance(content, list) and len(content) > 0:
+                    final_response = content[0].get("text", "No text in response")
+                else:
+                    final_response = str(content)
+            
+            # Count computer actions
+            computer_calls = [
+                item for item in items 
+                if item.get("type") == "computer_call"
+            ]
+            
+            num_commands = len(computer_calls)
+            action_types = Counter(
+                call["action"]["type"] 
+                for call in computer_calls
+            )
+            num_command_types = len(action_types)
+            
+            return {
+                "final_response": final_response,
+                "num_commands": num_commands,
+                "num_command_types": num_command_types
+            }
+        except Exception as e:
+            print(f"Error during attempt: {str(e)}")
+            return {"final_response": f"Error processing user input: {str(e)}", "num_commands": 0, "num_command_types": 0}
 
 def process_user_input(user_input: str, max_retries: int = 3) -> Dict:
     """Process user input with automatic retries on failure."""
@@ -111,10 +117,10 @@ def process_user_input(user_input: str, max_retries: int = 3) -> Dict:
 @app.post("/process", response_model=Response)
 async def process_request(user_input: UserInput) -> Response:
     try:
-        # Run the synchronous processing code in a thread pool
+        # Run the synchronous processing code in a separate process
         result = await app.state.loop.run_in_executor(
-            thread_pool,
-            process_user_input,
+            process_pool,
+            run_playwright_process,
             user_input.user_input
         )
         return Response(**result)
@@ -129,9 +135,11 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    # Clean up the thread pool
-    thread_pool.shutdown(wait=True)
+    # Clean up the process pool
+    process_pool.shutdown(wait=True)
 
 if __name__ == "__main__":
+    # Required for Windows compatibility
+    multiprocessing.freeze_support()
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000) 

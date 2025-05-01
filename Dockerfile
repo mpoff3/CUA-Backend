@@ -25,6 +25,11 @@ RUN pip install --upgrade pip \
 # Now copy the rest of the source code
 COPY . .
 
+# Ensure non-root user (pwuser) owns application directory so Chromium sandbox works
+RUN chown -R pwuser:pwuser /app
+
+USER pwuser
+
 ##############################
 # 4) Expose & default cmd    #
 ##############################

@@ -5,8 +5,12 @@ from agent.agent import Agent
 from computers import LocalPlaywrightComputer
 from collections import Counter
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 app = FastAPI()
+# Create a thread pool executor for running sync code
+thread_pool = ThreadPoolExecutor(max_workers=10)
 
 class UserInput(BaseModel):
     user_input: str
@@ -105,12 +109,28 @@ def process_user_input(user_input: str, max_retries: int = 3) -> Dict:
     raise last_error or Exception("Failed to process user input after all retries")
 
 @app.post("/process", response_model=Response)
-def process_request(user_input: UserInput) -> Response:
+async def process_request(user_input: UserInput) -> Response:
     try:
-        result = process_user_input(user_input.user_input)
+        # Run the synchronous processing code in a thread pool
+        result = await app.state.loop.run_in_executor(
+            thread_pool,
+            process_user_input,
+            user_input.user_input
+        )
         return Response(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.on_event("startup")
+async def startup_event():
+    # Store the event loop for use in endpoints
+    import asyncio
+    app.state.loop = asyncio.get_event_loop()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    # Clean up the thread pool
+    thread_pool.shutdown(wait=True)
 
 if __name__ == "__main__":
     import uvicorn

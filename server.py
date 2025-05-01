@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List
 from agent.agent import Agent
@@ -10,6 +11,16 @@ import multiprocessing
 from functools import partial
 
 app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # Add your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
 # Use a ProcessPoolExecutor, forcing the "spawn" start method so that
 # worker processes start with a **fresh** Python interpreter instead of being
 # forked.  On Linux the default is "fork", which copies the parent asyncio

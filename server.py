@@ -17,7 +17,7 @@ class Response(BaseModel):
     num_command_types: int
 
 def process_user_input_single_attempt(user_input: str) -> Dict:
-    with LocalPlaywrightComputer(headless=False) as computer:
+    with LocalPlaywrightComputer(headless=True) as computer:
         # Initialize browser with starting URL
         computer.goto("https://www.westelm.com")
         

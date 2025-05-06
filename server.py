@@ -9,8 +9,18 @@ import logging
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
 from functools import partial
+from contextlib import asynccontextmanager
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup code
+    import asyncio
+    app.state.loop = asyncio.get_event_loop()
+    yield
+    # Shutdown code
+    process_pool.shutdown(wait=True)
+
+app = FastAPI(lifespan=lifespan)
 
 # Add CORS middleware
 app.add_middleware(
@@ -43,7 +53,7 @@ def run_playwright_process(user_input: str) -> Dict:
     return process_user_input(user_input)
 
 def process_user_input_single_attempt(user_input: str) -> Dict:
-    with LocalPlaywrightComputer(headless=True) as computer:
+    with LocalPlaywrightComputer(headless=False) as computer:
         try:
             # Initialize browser with starting URL
             computer.goto("https://www.westelm.com")
@@ -144,19 +154,8 @@ async def process_request(user_input: UserInput) -> Response:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.on_event("startup")
-async def startup_event():
-    # Store the event loop for use in endpoints
-    import asyncio
-    app.state.loop = asyncio.get_event_loop()
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    # Clean up the process pool
-    process_pool.shutdown(wait=True)
-
 if __name__ == "__main__":
     # Required for Windows compatibility
     multiprocessing.freeze_support()
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8001) 

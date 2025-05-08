@@ -6,7 +6,7 @@ import os
 class LocalPlaywrightComputer(BasePlaywrightComputer):
     """Launches a local Chromium instance using Playwright."""
 
-    def __init__(self, headless: bool = False):
+    def __init__(self, headless: bool = True):
         super().__init__()
         self.headless = headless
 
@@ -28,6 +28,10 @@ class LocalPlaywrightComputer(BasePlaywrightComputer):
         )
         
         context = browser.new_context()
+        
+        # Set x-distil-secure header if a Playwright access token is provided
+        if playwright_token:
+            context.set_extra_http_headers({"x-distil-secure": playwright_token})
         
         # Add event listeners for page creation and closure
         context.on("page", self._handle_new_page)

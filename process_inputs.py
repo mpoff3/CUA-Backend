@@ -4,6 +4,10 @@ import pandas as pd
 from typing import List
 import os
 from openai import AsyncOpenAI
+from dotenv import load_dotenv
+from aiohttp import ClientTimeout
+load_dotenv()
+
 
 # Initialize OpenAI client
 client = AsyncOpenAI(api_key=os.getenv('OPENAI_API_KEY'))
@@ -59,12 +63,12 @@ async def evaluate_response(input_text: str, response_text: str) -> dict:
             "reasoning": f"Evaluation error: {str(e)}"
         }
 
-async def make_request(session, user_input: str, server_url: str) -> dict:
+async def make_request(session, user_input: str, product_search: str, server_url: str) -> dict:
     """Make a single async request to the server"""
     try:
         async with session.post(
             f"{server_url}/process",
-            json={"user_input": user_input},
+            json={"user_input": user_input, "product_search": product_search},
             headers={
                 'Content-Type': 'application/json',
                 'Accept': 'application/json'
@@ -77,15 +81,19 @@ async def make_request(session, user_input: str, server_url: str) -> dict:
         return {
             "final_response": str(e),
             "num_commands": None,
-            "num_command_types": None
+            "num_command_types": None,
+            "score": None,
+            "reasoning": f"Request error: {str(e)}"
         }
 
-async def process_inputs_async(user_inputs: List[str], product_search: List[str], server_url: str = "http://0.0.0.0:8001") -> None:
-    async with aiohttp.ClientSession() as session:
+async def process_inputs_async(user_inputs: List[str], product_search: List[str], server_url: str = "http://localhost:8001") -> None:
+    # Increase timeout to allow long-running server responses
+    timeout = ClientTimeout(total=None)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         # Create tasks for all inputs
-        tasks = [make_request(session, input_text, server_url) for input_text in user_inputs]
+        tasks = [make_request(session, input_text, ps, server_url) for input_text, ps in zip(user_inputs, product_search)]
         
-        # Execute all requests in parallel
+        # Execute all requests in parallel and wait for all to finish
         results = await asyncio.gather(*tasks)
         
         # Extract data from results
@@ -95,20 +103,19 @@ async def process_inputs_async(user_inputs: List[str], product_search: List[str]
         scores = []
         reasonings = []
         
-        # Evaluate each input-response pair
-        for ps, result in zip(product_search, results):
-            final_responses.append(result["final_response"])
-            num_commands_list.append(result["num_commands"])
-            num_command_types_list.append(result["num_command_types"])
-            
-            # Evaluate the response
-            evaluation = await evaluate_response(ps, result["final_response"])
-            scores.append(evaluation["score"])
-            reasonings.append(evaluation["reasoning"])
+        # First, collect all responses
+        for idx, result in enumerate(results):
+            print(f"\n[DEBUG] Raw result for input {idx}: {result}")
+            print(f"[DEBUG] Keys in result: {list(result.keys())}")
+            final_responses.append(result.get("final_response", ""))
+            num_commands_list.append(result.get("num_commands", None))
+            num_command_types_list.append(result.get("num_command_types", None))
+            scores.append(result.get("score", None))
+            reasonings.append(result.get("reasoning", ""))
         
         # Create DataFrame and save to CSV
         df = pd.DataFrame({
-            'user_input': user_inputs,
+            'cua_input': user_inputs,
             'product_search': product_search,
             'final_response': final_responses,
             'num_commands': num_commands_list,
@@ -129,13 +136,13 @@ async def process_inputs_async(user_inputs: List[str], product_search: List[str]
         print("\nEvaluation Summary:")
         for i, (input_text, ps, final_response, score, reasoning) in enumerate(zip(user_inputs, product_search, final_responses, scores, reasonings), 1):
             print(f"\nQuery {i}:")
-            print(f"Input: {input_text}")
+            print(f"CUA Input: {input_text}")
             print(f"Product Search: {ps}")
             print(f"Final Response: {final_response}")
             print(f"Score: {score}/10")
             print(f"Reasoning: {reasoning}")
 
-def process_inputs(user_inputs: List[str], product_search: List[str], server_url: str = "http://127.0.0.1:8001") -> None:
+def process_inputs(user_inputs: List[str], product_search: List[str], server_url: str = "http://localhost:8001") -> None:
     """Wrapper function to run the async code"""
     asyncio.run(process_inputs_async(user_inputs, product_search, server_url))
 
@@ -145,6 +152,6 @@ if __name__ == "__main__":
     cua_inputs = df['cua_input'].tolist()
     product_search = df['product_search'].tolist()
 
-    print(f'Processing: {cua_inputs[0:1]} and {product_search[0:1]}')
-
-    process_inputs(cua_inputs[0:1], product_search[0:1]) 
+    for i in range(0, len(cua_inputs), 10):
+        print(f'Processing rows {i} to {i+10}')
+        process_inputs(cua_inputs[i:i+10], product_search[i:i+10]) 

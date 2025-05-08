@@ -153,5 +153,5 @@ if __name__ == "__main__":
     product_search = df['product_search'].tolist()
 
     for i in range(0, len(cua_inputs), 10):
-        print(f'Processing rows {i} to {i+10}')
+        print(f'Processing rows {i+1} to {i+10}')
         process_inputs(cua_inputs[i:i+10], product_search[i:i+10]) 
